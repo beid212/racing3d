@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Круг на троих 3D</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+  <canvas id="mini" width="160" height="120"></canvas>
+  <div id="hud"></div>
+  <div id="nitro"><div id="nfill"></div><span>NITRO · SHIFT</span></div>
+  <div id="msg"></div>
+  <div id="tour"></div>
+  <button id="bMenu" class="alt" title="Меню (Esc)">☰ Меню · Esc</button>
+</div>
+
+<div id="modal" class="open">
+ <div id="panel" role="dialog" aria-modal="true" aria-labelledby="ttl">
+  <div class="head"><h1 id="ttl">Круг на троих 3D</h1><button id="bClose" class="alt" aria-label="Закрыть меню">✕</button></div>
+  <div class="row">
+    <label>Машина <select id="car"></select></label>
+    <label>Трасса (выбирает хост) <select id="trk"></select></label>
+  </div>
+  <div class="row">
+    <button id="bHost">Я хост</button>
+    <button id="bJoin" class="alt">Я гость</button>
+    <button id="bSolo">Играть одному</button>
+    <button id="bStart" disabled>Старт гонки</button>
+  </div>
+  <div class="row">
+    <label>Трасс в турнире <input id="tn" type="number" min="2" max="34" value="5"></label>
+    <button id="bTour" class="alt">Старт турнира</button>
+  </div>
+  <div id="status">Выберите машину и роль: хост создаёт игру, гости заходят по ссылке.</div>
+  <div id="slots"></div>
+  <details id="custom">
+    <summary>Своя трасса из редактора</summary>
+    <p class="hint">Редактор (<a href="editor.html" target="_blank" rel="noopener">editor.html</a>) кнопкой «Отправить в игру» кладёт трассу в браузер, и она сама появится в списке трасс. Для другого устройства вставьте сюда JSON из редактора.</p>
+    <textarea id="cDef" spellcheck="false" placeholder='{"pts":[[100,300],[400,200],...],"sprint":true,"sc":3,"theme":0}'></textarea>
+    <div class="row"><button id="cApply" class="alt">Применить</button><button id="cFill" class="alt">Показать текущую</button></div>
+  </details>
+  <div class="row"><button id="bFull" class="alt">Полный экран</button><a class="lnk" href="editor.html" target="_blank" rel="noopener">Редактор трасс</a></div>
+  <div class="hint">Управление: стрелки или WASD, пробел — ручник для дрифта, Shift — нитро (заряжается сам, быстрее при заносе). Круговые трассы: 3 круга. Спринт: один проезд от арки до арки. Турнир: случайные трассы подряд, очки 10/6/4 за места. Меню: Esc или кнопка справа вверху. Модели: см. MODELS.md.</div>
+ </div>
+</div>
+
+<script>
+// Библиотеки берутся из libs/ (создаётся командой npm install). Если папки нет, подтягиваются с CDN.
+(function(){
+ var CDN={'libs/three.min.js':'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js',
+  'libs/GLTFLoader.js':'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js',
+  'libs/peerjs.min.js':'https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js'};
+ var all=['libs/three.min.js','libs/GLTFLoader.js','libs/peerjs.min.js','js/config.js','js/tracks-gen.js','js/render.js','js/track.js','js/cars.js','js/state.js','js/custom.js','js/ui.js','js/net.js','js/tournament.js','js/physics.js','js/main.js'],i=0;
+ function load(src,fb,done){var s=document.createElement('script');s.src=src;s.onload=function(){done()};
+  s.onerror=function(){if(fb)load(fb,null,done);else{console.error('Не загрузился '+src);done(true)}};document.head.appendChild(s)}
+ (function next(){
+  if(i===3&&!window.THREE){document.body.insertAdjacentHTML('beforeend','<p style="position:fixed;z-index:20;left:20px;top:20px;color:#fff;font:16px sans-serif">Не удалось загрузить three.js. Выполните <b>npm install</b> в папке проекта.</p>');return}
+  if(i>=all.length)return;var src=all[i++];load(src,CDN[src],next)})();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "name": "race3d",
+  "version": "1.2.0",
+  "private": true,
+  "description": "Круг на троих 3D: браузерные гонки на троих (WebRTC, трассы, спринты, турниры)",
+  "scripts": {
+    "postinstall": "node scripts/copy-libs.js",
+    "start": "node scripts/serve.js",
+    "gen-tracks": "node scripts/gen-tracks.js"
+  },
+  "dependencies": {
+    "peerjs": "1.5.4",
+    "three": "0.128.0"
+  },
+  "engines": { "node": ">=16" }
+}

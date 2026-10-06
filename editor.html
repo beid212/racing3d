@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Редактор трасс</title>
+<style>
+:root{--bg:#14181c;--panel:#1d2329;--ink:#e8e4da;--mute:#8d958f;--acc:#f2b632;--line:#2e363d}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px system-ui,"Segoe UI",sans-serif;overflow:hidden}
+#bar{position:fixed;left:0;right:0;top:0;z-index:2;display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 10px;background:rgba(29,35,41,.94);border-bottom:1px solid var(--line)}
+#cv{position:fixed;inset:0;display:block;width:100%;height:100%;touch-action:none;cursor:crosshair}
+button,select,input{font:600 13px system-ui;border-radius:4px;padding:7px 10px;border:0;background:var(--acc);color:#1a1405;cursor:pointer}
+button.alt,select,input{background:#0f1316;color:var(--ink);border:1px solid var(--mute)}
+input[type=number]{width:70px;cursor:text}
+label{display:flex;gap:6px;align-items:center;color:var(--mute);font-size:13px}
+#info{position:fixed;left:10px;bottom:10px;z-index:2;background:rgba(29,35,41,.9);border:1px solid var(--line);border-radius:6px;padding:6px 10px;color:var(--mute);font-size:12px;max-width:calc(100% - 20px)}
+#info b{color:var(--ink)}
+#txtbox{position:fixed;right:10px;bottom:10px;z-index:2;width:min(420px,calc(100% - 20px));background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
+#txtbox summary{cursor:pointer;font-weight:600}
+textarea{width:100%;height:110px;margin-top:6px;background:#0f1316;color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:8px;font:12px ui-monospace,monospace}
+#toast{position:fixed;left:50%;top:70px;transform:translateX(-50%);z-index:3;background:var(--acc);color:#1a1405;font-weight:600;padding:8px 14px;border-radius:6px;display:none}
+</style></head><body>
+<div id="bar">
+ <select id="base" title="Шаблон"></select>
+ <label><input type="checkbox" id="sprint"> Спринт (не замкнута)</label>
+ <label>Биом <select id="theme"></select></label>
+ <label>Масштаб <input type="number" id="scl" min="0.3" max="30" step="0.5" value="3" title="Множитель карты в игре (sc)"></label>
+ <button id="bStart" class="alt" title="Выбранная точка станет стартовой (только для круга)">Старт здесь</button>
+ <button id="bFit" class="alt">Вписать</button>
+ <button id="bSend">Отправить в игру</button>
+ <button id="bCopyJ" class="alt">Копировать JSON</button>
+ <button id="bCopyP" class="alt">Копировать pts</button>
+</div>
+<canvas id="cv"></canvas>
+<div id="info"></div>
+<details id="txtbox"><summary>Текст трассы (JSON / pts)</summary><textarea id="out" spellcheck="false"></textarea><button id="bLoad" class="alt" style="margin-top:6px">Загрузить из текста</button></details>
+<div id="toast"></div>
+<script>
+const HW=60,WALL=HW+26.25;
+const PRESETS={
+ 'Лесная петля':{pts:[[420,70],[650,90],[730,220],[600,300],[700,420],[520,530],[330,500],[250,380],[120,430],[80,250],[200,120]],sprint:false,theme:0},
+ 'Дюны':{pts:[[120,100],[400,60],[680,110],[720,250],[560,300],[640,430],[500,540],[300,500],[200,380],[330,290],[160,230]],sprint:false,theme:1},
+ 'Снежные зубцы':{pts:[[110,500],[110,150],[250,70],[400,220],[550,70],[690,150],[690,500],[550,540],[400,400],[250,540]],sprint:false,theme:2},
+ 'Спринт по холмам':{pts:[[100,300],[350,200],[600,300],[800,520],[1050,640],[1300,500],[1400,250],[1650,120],[1900,250],[2000,500],[2250,640],[2500,520],[2650,300],[2900,200],[3150,330]],sprint:true,theme:0}};
+const THEMES=[['forest','Лес'],['desert','Дюны'],['snow','Снега'],['autumn','Осень'],['tropics','Тропики'],['volcano','Вулкан'],['canyon','Каньон'],['swamp','Болото'],['crystal','Кристаллы'],['night','Ночной лес'],['tundra','Тундра'],['savanna','Саванна']];
+const themeKey=v=>typeof v==='string'&&THEMES.some(t=>t[0]===v)?v:(['forest','desert','snow'][v|0]||'forest');
+const $=id=>document.getElementById(id),cv=$('cv'),g=cv.getContext('2d'),out=$('out');
+Object.keys(PRESETS).forEach(k=>$('base').add(new Option(k,k)));THEMES.forEach(t=>$('theme').add(new Option(t[1],t[0])));
+let S={pts:[],sprint:false,scl:3,theme:'forest'},sel=-1,V={cx:0,cy:0,k:.5},W=0,H=0,mouse=[0,0];
+
+// тот же сплайн, что и в игре (js/track.js): равномерный шаг ~10 ед. мира
+function buildSpline(pts,scl,open){
+ const Q=pts.map(p=>[p[0]*scl,p[1]*scl]),n=Q.length,segs=open?n-1:n,dense=[];
+ const P=i=>open?Q[Math.max(0,Math.min(n-1,i))]:Q[(i+n)%n];
+ for(let i=0;i<segs;i++){const p0=P(i-1),p1=P(i),p2=P(i+1),p3=P(i+2),st=Math.max(12,Math.ceil(Math.hypot(p2[0]-p1[0],p2[1]-p1[1])/5));
+  for(let j=0;j<st;j++){const u=j/st,u2=u*u,u3=u2*u;dense.push([0,1].map(k=>.5*(2*p1[k]+(-p0[k]+p2[k])*u+(2*p0[k]-5*p1[k]+4*p2[k]-p3[k])*u2+(-p0[k]+3*p1[k]-3*p2[k]+p3[k])*u3)))}}
+ if(open)dense.push(Q[n-1].slice());
+ const m=dense.length,cnt=open?m-1:m,cum=[0];
+ for(let i=0;i<cnt;i++){const a=dense[i],b=dense[(i+1)%m];cum.push(cum[i]+Math.hypot(b[0]-a[0],b[1]-a[1]))}
+ const L=cum[cnt],N=open?Math.max(2,Math.round(L/10))+1:Math.max(8,Math.round(L/10)),o=[];let j=0;
+ for(let k=0;k<N;k++){const d=open?L*k/(N-1):L*k/N;while(j<cnt-1&&cum[j+1]<d)j++;
+  const a=dense[j],b=dense[(j+1)%m],l=(cum[j+1]-cum[j])||1,u=Math.max(0,Math.min(1,(d-cum[j])/l));o.push([a[0]+(b[0]-a[0])*u,a[1]+(b[1]-a[1])*u])}
+ return o}
+
+const toS=(x,y)=>[(x-V.cx)*V.k+W/2,(y-V.cy)*V.k+H/2],toM=(sx,sy)=>[(sx-W/2)/V.k+V.cx,(sy-H/2)/V.k+V.cy];
+function resize(){const r=devicePixelRatio||1;W=innerWidth;H=innerHeight;cv.width=W*r;cv.height=H*r;g.setTransform(r,0,0,r,0,0);draw()}
+addEventListener('resize',resize);
+
+function fit(){
+ const p=S.pts;if(!p.length){V={cx:0,cy:0,k:.5};return}
+ let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;p.forEach(q=>{x0=Math.min(x0,q[0]);x1=Math.max(x1,q[0]);y0=Math.min(y0,q[1]);y1=Math.max(y1,q[1])});
+ const w=Math.max(100,x1-x0),h=Math.max(100,y1-y0);
+ V.cx=(x0+x1)/2;V.cy=(y0+y1)/2;V.k=Math.min((W-80)/w,(H-170)/h);
+}
+function niceStep(){const c=[10,20,50,100,200,500,1000,2000,5000,10000,20000,50000];return c.find(s=>s*V.k>=36)||50000}
+
+function draw(){
+ g.clearRect(0,0,W,H);g.fillStyle='#2c3a2f';g.fillRect(0,0,W,H);
+ // сетка
+ const st=niceStep(),a=toM(0,0),b=toM(W,H);
+ for(let x=Math.floor(a[0]/st)*st;x<=b[0];x+=st){const sx=toS(x,0)[0],major=Math.round(x/st)%5===0;g.strokeStyle=major?'rgba(255,255,255,.14)':'rgba(255,255,255,.06)';g.lineWidth=1;g.beginPath();g.moveTo(sx,0);g.lineTo(sx,H);g.stroke()}
+ for(let y=Math.floor(a[1]/st)*st;y<=b[1];y+=st){const sy=toS(0,y)[1],major=Math.round(y/st)%5===0;g.strokeStyle=major?'rgba(255,255,255,.14)':'rgba(255,255,255,.06)';g.lineWidth=1;g.beginPath();g.moveTo(0,sy);g.lineTo(W,sy);g.stroke()}
+ g.fillStyle='rgba(255,255,255,.35)';g.font='11px sans-serif';g.textAlign='left';g.textBaseline='top';
+ for(let x=Math.floor(a[0]/st)*st;x<=b[0];x+=st*5)g.fillText(x,toS(x,0)[0]+3,56);
+ const sc=S.scl,open=S.sprint,minN=open?2:3;
+ let info='';
+ if(S.pts.length>=minN){
+  const sp=buildSpline(S.pts,sc,open),N=sp.length,m=sp.map(p=>toS(p[0]/sc,p[1]/sc));
+  const path=()=>{g.beginPath();m.forEach((p,i)=>i?g.lineTo(p[0],p[1]):g.moveTo(p[0],p[1]));if(!open)g.closePath()};
+  g.lineJoin='round';g.lineCap='butt';
+  path();g.strokeStyle='rgba(214,45,45,.6)';g.lineWidth=Math.max(2,2*WALL/sc*V.k);g.stroke();   // отбойники
+  path();g.strokeStyle='#4a4d52';g.lineWidth=Math.max(1.5,2*HW/sc*V.k);g.stroke();               // асфальт
+  if(V.k*HW/sc>6){path();g.strokeStyle='#e8e2c8';g.lineWidth=1;g.setLineDash([8,8]);g.stroke();g.setLineDash([])}
+  // стрелки направления
+  const every=Math.max(8,Math.round(140/(10/sc*V.k)));
+  for(let i=every>>1;i<N-1;i+=every){
+   const p=m[i],q=m[i+1],an=Math.atan2(q[1]-p[1],q[0]-p[0]),r=Math.max(4,Math.min(9,HW/sc*V.k*.4));
+   g.save();g.translate(p[0],p[1]);g.rotate(an);g.fillStyle='rgba(255,255,255,.55)';g.beginPath();g.moveTo(r,0);g.lineTo(-r*.6,-r*.7);g.lineTo(-r*.6,r*.7);g.fill();g.restore()}
+  // линии старта/финиша
+  const line=(i,col)=>{i=Math.max(1,Math.min(N-1,i));const p=m[i],q=m[i-1],an=Math.atan2(p[1]-q[1],p[0]-q[0]),h=Math.max(6,HW/sc*V.k);
+   g.save();g.translate(p[0],p[1]);g.rotate(an+Math.PI/2);g.strokeStyle=col;g.lineWidth=4;g.beginPath();g.moveTo(-h,0);g.lineTo(h,0);g.stroke();g.restore()};
+  const S0=open?Math.min(24,N>>2):0,F0=open?Math.min(10,N>>3):0;
+  line(Math.max(1,S0),'#3ddc84');if(open)line(N-1-F0,'#ff5a4d');
+  const len=(open?N-1:N)*10;
+  info=`Длина: <b>${len.toLocaleString('ru')}</b> ед. · ${open?'спринт':'круг ×3 = '+(len*3).toLocaleString('ru')+' ед.'} · при ~330 ед/с ≈ <b>${Math.round(len*(open?1:3)/330)}</b> с · `;
+ }
+ // контрольные точки
+ S.pts.forEach((p,i)=>{const [x,y]=toS(p[0],p[1]);
+  g.beginPath();g.arc(x,y,i===sel?9:7,0,7);
+  g.fillStyle=i===0?'#3ddc84':(open&&i===S.pts.length-1)?'#ff5a4d':i===sel?'#f2b632':'#fff';g.fill();g.strokeStyle='#000';g.lineWidth=1.5;g.stroke();
+  g.fillStyle='#000';g.font='bold 9px sans-serif';g.textAlign='center';g.textBaseline='middle';g.fillText(i,x,y+.5)});
+ const mm=toM(mouse[0],mouse[1]);
+ $('info').innerHTML=info+`точек: <b>${S.pts.length}</b> · курсор: ${Math.round(mm[0])}, ${Math.round(mm[1])} · зум: ${Math.round(V.k*100)}% · колесо: зум, ПКМ/СКМ/перетаскивание фона: сдвиг, клик по фону: новая точка, двойной клик по точке или Delete: удалить`;
+ sync();
+}
+let syncT=0;
+function sync(){
+ const def={pts:S.pts,sprint:S.sprint,sc:S.scl,theme:S.theme};
+ if(document.activeElement!==out)out.value=JSON.stringify(def);
+ clearTimeout(syncT);syncT=setTimeout(()=>{try{localStorage.setItem('race3d.editor',JSON.stringify(def))}catch(e){}},300);
+}
+function toast(t){const e=$('toast');e.textContent=t;e.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>e.style.display='none',2200)}
+
+// ---- мышь ----
+const pos=e=>{const r=cv.getBoundingClientRect();return[e.clientX-r.left,e.clientY-r.top]};
+const hit=q=>S.pts.findIndex(p=>{const s=toS(p[0],p[1]);return Math.hypot(s[0]-q[0],s[1]-q[1])<12});
+let mode=null,start=[0,0],moved=0,last=[0,0];
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+cv.addEventListener('pointerdown',e=>{
+ const q=pos(e);start=last=q;moved=0;cv.setPointerCapture(e.pointerId);
+ if(e.button===1||e.button===2){mode='pan';return}
+ const h=hit(q);if(h>=0){sel=h;mode='drag';draw()}else mode='bg';
+});
+cv.addEventListener('pointermove',e=>{
+ const q=pos(e);mouse=q;
+ if(mode==='drag'){const m=toM(q[0],q[1]);S.pts[sel]=[Math.round(m[0]),Math.round(m[1])];moved=99}
+ else if(mode==='pan'||mode==='bg'){moved+=Math.abs(q[0]-last[0])+Math.abs(q[1]-last[1]);if(mode==='pan'||moved>4){V.cx-=(q[0]-last[0])/V.k;V.cy-=(q[1]-last[1])/V.k}}
+ last=q;draw();
+});
+cv.addEventListener('pointerup',e=>{
+ if(mode==='bg'&&moved<=4)addPoint(pos(e));
+ mode=null;draw();
+});
+cv.addEventListener('dblclick',e=>{const h=hit(pos(e));if(h>=0)delPoint(h)});
+addEventListener('keydown',e=>{if(e.code==='Delete'&&sel>=0&&document.activeElement===document.body)delPoint(sel)});
+function delPoint(i){if(S.pts.length>(S.sprint?2:3)){S.pts.splice(i,1);sel=-1;draw()}}
+function segDist(p,a,b){const dx=b[0]-a[0],dy=b[1]-a[1],l2=dx*dx+dy*dy||1,t=((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l2,c=Math.max(0,Math.min(1,t));return[Math.hypot(p[0]-a[0]-dx*c,p[1]-a[1]-dy*c),t]}
+function addPoint(q){
+ const m=toM(q[0],q[1]),np=[Math.round(m[0]),Math.round(m[1])],p=S.pts,n=p.length;
+ if(n<2){p.push(np);sel=p.length-1;return}
+ let bi=0,bd=1e18,bt=0;const segs=S.sprint?n-1:n;
+ for(let i=0;i<segs;i++){const [d,t]=segDist(np,p[i],p[(i+1)%n]);if(d<bd){bd=d;bi=i;bt=t}}
+ if(S.sprint&&bi===n-2&&bt>=1){p.push(np);sel=p.length-1}            // продлить конец спринта
+ else if(S.sprint&&bi===0&&bt<=0){p.unshift(np);sel=0}                // продлить начало
+ else{p.splice(bi+1,0,np);sel=bi+1}
+}
+cv.addEventListener('wheel',e=>{
+ e.preventDefault();let d=e.deltaY*(e.deltaMode===1?33:1);
+ const q=pos(e),m=toM(q[0],q[1]);
+ V.k=Math.max(.005,Math.min(20,V.k*Math.exp(-d*(e.ctrlKey?.01:.0015))));
+ V.cx=m[0]-(q[0]-W/2)/V.k;V.cy=m[1]-(q[1]-H/2)/V.k;draw();
+},{passive:false});
+
+// ---- панель ----
+function apply(d){
+ S.pts=d.pts.map(p=>[+p[0],+p[1]]);S.sprint=!!d.sprint;S.scl=+d.sc||+d.scl||3;S.theme=themeKey(d.theme);sel=-1;
+ $('sprint').checked=S.sprint;$('scl').value=S.scl;$('theme').value=S.theme;
+}
+$('base').onchange=()=>{const d=PRESETS[$('base').value];apply({...d,sc:3});fit();draw()};
+$('sprint').onchange=()=>{S.sprint=$('sprint').checked;if(S.sprint&&S.pts.length<2)S.pts.push([0,0]);draw()};
+$('theme').onchange=()=>{S.theme=$('theme').value;draw()};
+$('scl').onchange=()=>{S.scl=Math.max(.3,Math.min(30,+$('scl').value||3));$('scl').value=S.scl;draw()};
+$('bFit').onclick=()=>{fit();draw()};
+$('bStart').onclick=()=>{if(S.sprint){toast('У спринта старт — первая точка');return}if(sel>0){S.pts=S.pts.slice(sel).concat(S.pts.slice(0,sel));sel=0;draw()}else toast('Выберите точку (не нулевую)')};
+const defJSON=()=>JSON.stringify({pts:S.pts,sprint:S.sprint,sc:S.scl,theme:S.theme});
+const copy=async(t,msg)=>{try{await navigator.clipboard.writeText(t);toast(msg)}catch(e){out.focus();out.value=t;out.select();toast('Выделено, нажмите Ctrl+C')}};
+$('bCopyJ').onclick=()=>copy(defJSON(),'JSON скопирован: вставьте в меню игры → «Своя трасса»');
+$('bCopyP').onclick=()=>copy('pts:['+S.pts.map(p=>'['+p[0]+','+p[1]+']').join(',')+']'+(S.sprint?',open:true':'')+(S.scl!==3?',scl:'+S.scl:''),'pts скопирован: вставьте в TRACKS в js/config.js');
+$('bSend').onclick=()=>{try{localStorage.setItem('race3d.custom',defJSON());toast('Отправлено. Откройте игру: трасса «Своя трасса» появится в списке')}catch(e){toast('Браузер не дал сохранить. Используйте «Копировать JSON»')}};
+$('bLoad').onclick=()=>{
+ const t=out.value;let d=null;
+ try{d=JSON.parse(t)}catch(e){const m=t.match(/pts\s*:\s*(\[[\s\S]*?\]\s*\])/);if(m){try{d={pts:JSON.parse(m[1])};d.sprint=/open\s*:\s*true/.test(t);const s=t.match(/scl\s*:\s*([\d.]+)/);if(s)d.sc=+s[1]}catch(e2){}}}
+ if(d&&Array.isArray(d.pts)&&d.pts.length>=2){apply(d);fit();draw();toast('Загружено')}else toast('Не удалось разобрать текст');
+ out.blur();
+};
+
+// старт: последнее сохранённое состояние или шаблон
+resize();
+try{const s=JSON.parse(localStorage.getItem('race3d.editor')||'null');if(s&&Array.isArray(s.pts)&&s.pts.length>=2)apply(s);else apply({...PRESETS['Лесная петля'],sc:3})}catch(e){apply({...PRESETS['Лесная петля'],sc:3})}
+fit();draw();
+</script></body></html>
